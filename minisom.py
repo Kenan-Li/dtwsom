@@ -1,9 +1,10 @@
 from math import sqrt
-
+from fastdtw import fastdtw
 from numpy import (array, unravel_index, nditer, linalg, random, subtract,
                    power, exp, pi, zeros, arange, outer, meshgrid, dot,
                    logical_and, mean, std, cov, argsort, linspace, transpose,
                    einsum)
+from scipy.spatial.distance import euclidean
 from numpy import sum as npsum
 from collections import defaultdict, Counter
 from warnings import warn
@@ -12,7 +13,7 @@ from time import time
 from datetime import timedelta
 import pickle
 import os
-
+import numpy as np
 # for unit tests
 from numpy.testing import assert_almost_equal, assert_array_almost_equal
 from numpy.testing import assert_array_equal
@@ -413,8 +414,196 @@ class MiniSom(object):
             winmap[position] = Counter(winmap[position])
         return winmap
 
+class DtwSom(MiniSom):
+    def DTW_update(self, s1, s2, w):
+        """find the best path"""
+        distance, best_path = fastdtw(s1, s2, dist=euclidean)
+        x_cords = []
+        y_cords = []
+        # print(w)
+        for i in best_path:
+            x_cords += [round(i[0] * w + i[1] * (1 - w))]
+            y_cords += [s1[i[0]] * w + s2[i[1]] * (1 - w)]
+        s3 = []
+        for j in range(len(s1)):
+            sublistj = [y_cords[k] for k in np.where(np.isin(np.array(x_cords), j))[0]]
+            if len(sublistj) != 0:
+                s3 += [sum(sublistj) / len(sublistj)]
+            else:
+                s3 += [s3[-1]]
+        return s3
 
-class TestMinisom(unittest.TestCase):
+    def _activate(self, x):
+        """Updates matrix activation_map, in this matrix
+           the element i,j is the response of the neuron i,j to x."""
+        # s = subtract(x, self._weights)  # x - w
+        it = nditer(self._activation_map, flags=['multi_index'])
+        while not it.finished:
+            # || x - w ||
+            self._activation_map[it.multi_index] = fastdtw(x, self._weights[it.multi_index], dist=euclidean)[0]
+            it.iternext()
+
+    def update(self, x, win, t, max_iteration):
+        """Updates the weights of the neurons.
+
+        Parameters
+        ----------
+        x : np.array
+            Current pattern to learn.
+        win : tuple
+            Position of the winning neuron for x (array or tuple).
+        t : int
+            Iteration index
+        max_iteration : int
+            Maximum number of training itarations.
+        """
+        eta = self._decay_function(self._learning_rate, t, max_iteration)
+        # sigma and learning rate decrease with the same rule
+        sig = self._decay_function(self._sigma, t, max_iteration)
+        # improves the performances
+        g = self.neighborhood(win, sig) * eta
+        it = nditer(g, flags=['multi_index'])
+
+        while not it.finished:
+            # eta * neighborhood_function * (x-w)
+            self._weights[it.multi_index] = self.DTW_update(x, self._weights[it.multi_index], g[it.multi_index])
+            it.iternext()
+
+    def distance_map(self):
+        """Returns the distance map of the weights.
+        Each cell is the normalised sum of the distances between
+        a neuron and its neighbours."""
+        um = zeros((self._weights.shape[0], self._weights.shape[1]))
+        it = nditer(um, flags=['multi_index'])
+        while not it.finished:
+            for ii in range(it.multi_index[0] - 1, it.multi_index[0] + 2):
+                for jj in range(it.multi_index[1] - 1, it.multi_index[1] + 2):
+                    if (ii >= 0 and ii < self._weights.shape[0] and
+                            jj >= 0 and jj < self._weights.shape[1]):
+                        w_1 = self._weights[ii, jj, :]
+                        w_2 = self._weights[it.multi_index]
+                        um[it.multi_index] += fastdtw(w_1, w_2, dist=euclidean)[0]
+            it.iternext()
+        um = um / um.max()
+        return um
+
+    def quantization_error(self, data):
+        """Returns the quantization error computed as the average
+        distance between each input sample and its best matching unit."""
+        self._check_input_len(data)
+        error = 0
+        for x in data:
+            error += fastdtw(x, self._weights[self.winner(x)], dist=euclidean)[0]
+        return error / len(data)
+
+class MultiDtwSom(DtwSom):
+    def __init__(self, x, y, input_len, bands, w, sigma=1.0, learning_rate=0.5,
+                 decay_function=asymptotic_decay,
+                 neighborhood_function='gaussian', random_seed=None):
+        super().__init__(x, y, input_len, sigma, learning_rate,
+                 decay_function, neighborhood_function, random_seed)
+        self._weights = []
+        self._bands = bands
+        self._w = w
+        for i in range(self._bands):
+            weightsi = self._random_generator.rand(x, y, input_len) * 2 - 1
+
+            for i in range(x):
+                for j in range(y):
+                    # normalization
+                    norm = fast_norm(weightsi[i, j])
+                    weightsi[i, j] = weightsi[i, j] / norm
+            self._weights += [weightsi]
+        self._check_weights(self._w, self._bands)
+
+    def _check_weights(self, w, bands):
+        if len(w) != bands:
+            raise ValueError(' number of weights must be equal bands')
+        elif sum(w) != 1:
+            raise ValueError(' sum of weights must be equal 1')
+
+    def _activate(self, x):
+        """Updates matrix activation_map, in this matrix
+           the element i,j is the response of the neuron i,j to x."""
+        # s = subtract(x, self._weights)  # x - w
+        it = nditer(self._activation_map, flags=['multi_index'])
+        while not it.finished:
+            # || x - w ||
+            for i in range(self._bands):
+                self._activation_map[it.multi_index] += self._w[i]*fastdtw(x[i], self._weights[i][it.multi_index])[0]
+            it.iternext()
+
+    def _check_input_len(self, data):
+        """Checks that the data in input is of the correct shape."""
+        data_len = len(data[0][0])
+        if self._input_len != data_len:
+            msg = 'Received %d features, expected %d.' % (data_len,
+                                                          self._input_len)
+            raise ValueError(msg)
+
+    def update(self, x, win, t, max_iteration):
+        """Updates the weights of the neurons.
+
+        Parameters
+        ----------
+        x : np.array
+            Current pattern to learn.
+        win : tuple
+            Position of the winning neuron for x (array or tuple).
+        t : int
+            Iteration index
+        max_iteration : int
+            Maximum number of training itarations.
+        """
+        eta = self._decay_function(self._learning_rate, t, max_iteration)
+        # sigma and learning rate decrease with the same rule
+        sig = self._decay_function(self._sigma, t, max_iteration)
+        # improves the performances
+        g = self.neighborhood(win, sig) * eta
+        it = nditer(g, flags=['multi_index'])
+
+        while not it.finished:
+            # eta * neighborhood_function * (x-w)
+            for i in range(self._bands):
+                self._weights[i][it.multi_index] = self.DTW_update(x[i], self._weights[i][it.multi_index],
+                                                                   g[it.multi_index])
+            it.iternext()
+
+    def random_weights_init(self, data):
+        """Initializes the weights of the SOM
+        picking random samples from data."""
+        self._check_input_len(data)
+        it = nditer(self._activation_map, flags=['multi_index'])
+        while not it.finished:
+            rand_i = self._random_generator.randint(len(data))
+            for i in range(self._bands):
+                self._weights[i][it.multi_index] = data[rand_i][i]
+                norm = fast_norm(self._weights[i][it.multi_index])
+                self._weights[i][it.multi_index] = self._weights[i][it.multi_index] / norm
+            it.iternext()
+
+    def distance_map(self):
+        """Returns the distance map of the weights.
+        Each cell is the normalised sum of the distances between
+        a neuron and its neighbours."""
+        um = zeros((self._weights.shape[0], self._weights.shape[1]))
+        it = nditer(um, flags=['multi_index'])
+        while not it.finished:
+            for ii in range(it.multi_index[0] - 1, it.multi_index[0] + 2):
+                for jj in range(it.multi_index[1] - 1, it.multi_index[1] + 2):
+                    if (ii >= 0 and ii < self._weights.shape[0] and
+                            jj >= 0 and jj < self._weights.shape[1]):
+                        for i in self._bands:
+                            w_1 = self._weights[i][ii, jj, :]
+                            w_2 = self._weights[i][it.multi_index]
+                            um[it.multi_index] += dtw.distance_fast(w_1, w_2)
+            it.iternext()
+        um = um / um.max()
+        return um
+
+
+
+class TestMiniSom(unittest.TestCase):
     def setUp(self):
         self.som = MiniSom(5, 5, 1)
         for i in range(5):
