@@ -1,7 +1,7 @@
 <h1>DtwSom</h1>
 
-Dynamic Time Warping Self Organizing Maps
 --------------------
+Dynamic Time Warping Self Organizing Maps
 
 DtwSom is a python implementation of Dynamic Time Warping Self Organizing Map (DTW-SOM).DTW-SOM substitutes the original SOM distance measurement to dynamic time warping distance, moreover it uses the dynamic time warping alignment in training other than the original element-wise alignment. These changes will allow DTW-SOM to outperform SOM in time series clustering. A multi-variate DTW-SOM has also been developed.
 ---------------------
