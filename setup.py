@@ -2,16 +2,16 @@
 
 from distutils.core import setup
 
-setup(name='MiniSom',
-  version= '2.1.9',
-  description='Minimalistic implementation of the Self Organizing Maps (SOM)',
-  author='Giuseppe Vettigli',
+setup(name='DtwSom',
+  version= '1.0',
+  description='Implementation of the Dynamic Time Warping Self Organizing Maps (DTW-SOM)',
+  author='Kenan Li',
   package_data={'': ['Readme.md']},
   include_package_data=True,
   license="CC BY 3.0",
-  py_modules=['minisom'],
-  requires = ['numpy'],
-  url = 'https://github.com/JustGlowing/minisom',
-  download_url = 'https://github.com/JustGlowing/minisom/archive/master.zip',
+  py_modules=['dtwsom'],
+  requires = ['numpy', 'fastdtw'],
+  url = 'https://github.com/Kenan-Li/dtwsom',
+  download_url = 'https://github.com/Kenan-Li/dtwsom/archive/master.zip',
   keywords = ['machine learning', 'neural networks', 'clustering', 'dimentionality reduction']
  )
