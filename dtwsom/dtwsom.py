@@ -415,6 +415,7 @@ class MiniSom(object):
             winmap[position] = Counter(winmap[position])
         return winmap
 
+
 class DtwSom(MiniSom):
     def __init__(self, x, y, input_len, sigma=1.0, learning_rate=0.5,
                  decay_function=asymptotic_decay,neighborhood_function='gaussian', random_seed=None,
@@ -425,6 +426,7 @@ class DtwSom(MiniSom):
         self.gl_const = gl_const
         self.scr = scr
         self.ims = ims
+
     def DTW_update(self, s1, s2, w):
         """find the best path"""
         best_path, distance = dtw_path(s1, s2, global_constraint=self.gl_const, sakoe_chiba_radius=self.scr,
@@ -454,7 +456,6 @@ class DtwSom(MiniSom):
                                                       global_constraint=self.gl_const,
                                                        sakoe_chiba_radius=self.scr,itakura_max_slope=self.ims)
             it.iternext()
-
 
     def update(self, x, win, t, max_iteration):
 
@@ -505,8 +506,10 @@ class MultiDtwSom(DtwSom):
                  decay_function=asymptotic_decay,
                  neighborhood_function='gaussian', random_seed=None,
                  gl_const=None, scr=None, ims=None):
-        super().__init__(x, y, input_len, sigma, learning_rate,
-                 decay_function, neighborhood_function, random_seed)
+        super().__init__(x, y, input_len, sigma, learning_rate=learning_rate,
+                         decay_function=decay_function, neighborhood_function=neighborhood_function,
+                         random_seed=random_seed,
+                         gl_const=gl_const, scr=scr, ims=scr)
         self.gl_const = gl_const
         self.scr = scr
         self.ims = ims
@@ -530,20 +533,6 @@ class MultiDtwSom(DtwSom):
         elif sum(w) != 1:
             raise ValueError(' sum of weights must be equal 1')
 
-    def _activate(self, x):
-        """Updates matrix activation_map, in this matrix
-           the element i,j is the response of the neuron i,j to x."""
-        # s = subtract(x, self._weights)  # x - w
-        it = nditer(self._activation_map, flags=['multi_index'])
-        while not it.finished:
-            # || x - w ||
-            for i in range(self._bands):
-                self._activation_map[it.multi_index] += self._w[i]*dtw(x[i], self._weights[i][it.multi_index],
-                                                                       global_constraint=self.gl_const,
-                                                                       sakoe_chiba_radius=self.scr,
-                                                                       itakura_max_slope=self.ims)
-            it.iternext()
-
     def _check_input_len(self, data):
         """Checks that the data in input is of the correct shape."""
         data_len = len(data[0][0])
@@ -551,6 +540,20 @@ class MultiDtwSom(DtwSom):
             msg = 'Received %d features, expected %d.' % (data_len,
                                                           self._input_len)
             raise ValueError(msg)
+
+    def get_weights(self):
+        """Returns the weights of the neural network."""
+        return np.array(self._weights)
+
+    def quantization(self, data):
+        """Assigns a code book (weights vector of the winning neuron)
+        to each sample in data."""
+        self._check_input_len(data)
+        q = zeros(data.shape)
+        for k in range(self._bands):
+            for i, x in enumerate(data[:, k, :]):
+                q[i][k] = self._weights[k][self.winner(x)]
+        return q
 
     def update(self, x, win, t, max_iteration):
         """Updates the weights of the neurons.
@@ -610,7 +613,7 @@ class MultiDtwSom(DtwSom):
                   'One of the dimensions of the map is 1.'
             warn(msg)
         for k in range(self._bands):
-            pc_length, pc = linalg.eig(cov(transpose(data[k])))
+            pc_length, pc = linalg.eig(cov(transpose(data[:, k, :])))
             pc_order = argsort(-pc_length)
             for i, c1 in enumerate(linspace(-1, 1, len(self._neigx))):
                 for j, c2 in enumerate(linspace(-1, 1, len(self._neigy))):
@@ -643,10 +646,40 @@ class MultiDtwSom(DtwSom):
         self._check_input_len(data)
         error = 0
         for i in range(self._bands):
-            for x in data[i]:
+            for x in data[:, i, :]:
                 error += dtw(x, self._weights[i][self.winner(x)],global_constraint=self.gl_const,
                              sakoe_chiba_radius=self.scr,itakura_max_slope=self.ims)
         return error / (len(data[0])*self._bands)
+
+
+    def _activate(self, x):
+        """Updates matrix activation_map, in this matrix
+           the element i,j is the response of the neuron i,j to x."""
+        # s = subtract(x, self._weights)  # x - w
+        it = nditer(self._activation_map, flags=['multi_index'])
+        while not it.finished:
+            # || x - w ||
+            activation_cell = 0
+            for i in range(self._bands):
+                activation_cell += self._w[i]*dtw(x[i], self._weights[i][it.multi_index],
+                                                                       global_constraint=self.gl_const,
+                                                                       sakoe_chiba_radius=self.scr,
+                                                                       itakura_max_slope=self.ims)
+                self._activation_map[it.multi_index] = activation_cell
+            it.iternext()
+
+
+    def activation_response(self, data):
+        """
+            Returns a matrix where the element i,j is the number of times
+            that the neuron i,j have been winner.
+        """
+        self._check_input_len(data)
+        a = zeros((np.shape(self._weights)[1], np.shape(self._weights)[2]))
+        for x in data:
+            a[self.winner(x)] += 1
+        return a
+
 
 
 class TestMiniSom(unittest.TestCase):
