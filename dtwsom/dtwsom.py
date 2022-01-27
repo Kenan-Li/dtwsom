@@ -646,10 +646,10 @@ class MultiDtwSom(DtwSom):
         self._check_input_len(data)
         error = 0
         for i in range(self._bands):
-            for x in data[:, i, :]:
-                error += dtw(x, self._weights[i][self.winner(x)],global_constraint=self.gl_const,
+            for x in data:
+                error += dtw(x[i], self._weights[i][self.winner(x)],global_constraint=self.gl_const,
                              sakoe_chiba_radius=self.scr,itakura_max_slope=self.ims)
-        return error / (len(data[0])*self._bands)
+        return error / (len(data)*self._bands)
 
 
     def _activate(self, x):
